@@ -66,6 +66,29 @@ class BytecodeSubstitutions:
         return self._code
 
 
+def hack_code_refs(code, names):
+    subs = BytecodeSubstitutions(code)
+    subs.global_to_deref(names)
+    subs.local_to_deref(names)
+    return subs.compile()
+
+
+def f_replace(f, *, code=None, closure=None):
+    new_f = FunctionType(code or f.__code__, f.__globals__, f.__name__,
+                         f.__defaults__, closure or f.__closure__)
+    new_f.__kwdefaults__ = f.__kwdefaults__
+    return new_f
+
+
+def hack_function_refs(f, names):
+    code = hack_code_refs(f.__code__, names)
+    f_closure = f.__closure__
+    slots = [CellType(None)] * len(code.co_freevars)
+    if f_closure:
+        slots[:len(f_closure)] = f_closure
+    return f_replace(f, code=code, closure=tuple(slots))
+
+
 class CellMap:
 
     __slots__ = ('_d',)
@@ -84,25 +107,18 @@ class CellMap:
     def __setitem__(self, k, v):
         self._d[k].cell_contents = v
 
-    def make_closure(self, f):
-        code = f.__code__
-        subs = BytecodeSubstitutions(code)
-        subs.global_to_deref(self._d)
-        subs.local_to_deref(self._d)
-        code = subs.compile()
-        closure = f.__closure__ or ()
-        extra_vars = code.co_freevars[len(closure):]
-        closure += tuple([self._d[k] for k in extra_vars])
-        new_f = FunctionType(code, f.__globals__, f.__name__,
-                             f.__defaults__, closure)
-        new_f.__kwdefaults__ = f.__kwdefaults__
-        return new_f
+    def replace_closure(self, f):
+        freevars = f.__code__.co_freevars
+        closure = f.__closure__
+        slots = [self._d[k] if k in self._d else v
+                 for k, v in zip(freevars, closure)]
+        return f_replace(f, closure=tuple(slots))
 
-    def close_all(self):
+    def replace_all_closures(self):
         for k in self._d:
             v = self[k]
             if type(v) is FunctionType:
-                self[k] = self.make_closure(v)
+                self[k] = self.replace_closure(v)
 
 
 class Descr:
@@ -135,13 +151,16 @@ class Super:
     def __getattribute__(self, name):
         inst, cls, mro = super().__getattribute__('_params')
         mro = list(mro)
-        f = last_f = mro[-1]._cellvars[name]
+        scls = mro[-1]
+        f = last_f = scls._cellvars[name]
         while f is last_f:
             mro.pop()
-            f = mro[-1]._cellvars[name]
-        new_cellvars = {cls.SUPERNAME: Super(inst, cls, mro)}
+            scls = mro[-1]
+            f = scls._cellvars[name]
+        new_cellvars = {scls.SELFNAME: inst,
+                        scls.SUPERNAME: Super(inst, cls, mro)}
         cellmap = CellMap(new_cellvars, parent_map=inst.cellmap)
-        return cellmap.make_closure(f)
+        return cellmap.replace_closure(f)
 
 
 class Selfless:
@@ -158,10 +177,15 @@ class Selfless:
                 raise TypeError('Selfless classes cannot have self-ish bases.')
             cellvars.update(b._cellvars)
         base_vars = vars(Selfless)
-        for k, v in vars(cls).items():
-            if k not in base_vars:
-                cellvars[k] = v
-                setattr(cls, k, Descr(k))
+        cls_vars = vars(cls)
+        keys = [k for k in cls_vars if k not in base_vars]
+        closure_names = {cls.SELFNAME, cls.SUPERNAME, *cellvars, *keys}
+        for k in keys:
+            v = cls_vars[k]
+            if type(v) is FunctionType:
+                v = hack_function_refs(v, closure_names)
+            setattr(cls, k, Descr(k))
+            cellvars[k] = v
 
     def __new__(cls, *args, **kwargs):
         self = object.__new__(cls)
@@ -169,5 +193,5 @@ class Selfless:
                     cls.SUPERNAME: Super(self, cls),
                     **cls._cellvars}
         self.cellmap = CellMap(cellvars)
-        self.cellmap.close_all()
+        self.cellmap.replace_all_closures()
         return self
