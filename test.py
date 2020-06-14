@@ -23,6 +23,10 @@ class Writer(Selfless):
         _strings = []
         _file = file or sys.stdout
 
+    def __len__():
+        """ Special method test. """
+        return len(_strings)
+
     def add(*args):
         """ Augmented assignment test. """
         _strings += args
@@ -65,8 +69,6 @@ class WriterExtended(WriterLeft, WriterRight):
 
     _header = None  # New instance vars may be added in subclasses.
 
-    _FOOTER = "THE END"
-
     def __init__(header, **kwargs):
         """ Super call with kwargs, skips 2 MRO levels. """
         super.__init__(**kwargs)
@@ -78,7 +80,7 @@ class WriterExtended(WriterLeft, WriterRight):
             _write(_header)
         _write(_foo)
         super.write_all()
-        _write(_FOOTER)
+        _write('END')
 
 
 def test():
@@ -88,6 +90,8 @@ def test():
     x.add('1')
     x.add('2', '3')
     Writer.add(x, '4')
+    string_count = len(x)
+    x.add(f'L{string_count}')
     x.set_delim('/')
     x.write_all()
     return buf.getvalue()
@@ -95,7 +99,7 @@ def test():
 
 def test_output():
     actual = test()
-    expected = 'STARTLEFTleftright/1/2/3/4THE END'
+    expected = 'STARTLEFTleftright/1/2/3/4/L4END'
     print('Need: ' + expected)
     print('Got:  ' + actual)
     return int(actual != expected)
