@@ -2,6 +2,7 @@
 
 import io
 import sys
+import timeit
 
 from selfless import Selfless
 
@@ -89,12 +90,30 @@ def test():
     Writer.add(x, '4')
     x.set_delim('/')
     x.write_all()
-    out = buf.getvalue()
+    return buf.getvalue()
+
+
+def test_output():
+    actual = test()
     expected = 'STARTLEFTleftright/1/2/3/4THE END'
     print('Need: ' + expected)
-    print('Got:  ' + out)
-    return int(out != expected)
+    print('Got:  ' + actual)
+    return int(actual != expected)
+
+
+def test_bench(n, r=1):
+    if r > 1:
+        t = min(timeit.repeat(test, number=n//r, repeat=r)) * r
+    else:
+        t = timeit.timeit(test, number=n)
+    print(f'Extrapolated best time for {n} runs: {t:.3f} seconds.')
+    return 0
 
 
 if __name__ == '__main__':
-    sys.exit(test())
+    args = sys.argv[1:]
+    if args:
+        code = test_bench(*map(int, args))
+    else:
+        code = test_output()
+    sys.exit(code)
