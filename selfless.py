@@ -1,12 +1,12 @@
 """ HERE BE DRAGONS. That is all. """
 
-import dis
-OPS = type('opmap', (), dis.opmap)
+try:
+    from dis import opmap
+    from types import CellType, FunctionType
+except ImportError:
+    raise RuntimeError('module "selfless" requires Python 3.8 or higher.')
 
-_FN = lambda c: lambda: c
-FunctionType = type(_FN)
-CellType = type(_FN(0).__closure__[0])
-del _FN
+OPS = type('opmap', (), opmap)
 
 
 class BytecodeSubstitutions:
@@ -139,18 +139,21 @@ class Super:
         while f is last_f:
             mro.pop()
             f = mro[-1]._cellvars[name]
-        new_cellvars = {'super': Super(inst, cls, mro)}
+        new_cellvars = {cls.SUPERNAME: Super(inst, cls, mro)}
         cellmap = CellMap(new_cellvars, parent_map=inst.cellmap)
         return cellmap.make_closure(f)
 
 
 class Selfless:
 
+    SELFNAME = 'self'
+    SUPERNAME = 'super'
+
     _cellvars = {}
 
     def __init_subclass__(cls):
         cellvars = cls._cellvars = {}
-        for b in cls.__bases__:
+        for b in cls.__bases__[::-1]:
             if not issubclass(b, Selfless):
                 raise TypeError('Selfless classes cannot have self-ish bases.')
             cellvars.update(b._cellvars)
@@ -162,8 +165,8 @@ class Selfless:
 
     def __new__(cls, *args, **kwargs):
         self = object.__new__(cls)
-        cellvars = {'self': self,
-                    'super': Super(self, cls),
+        cellvars = {cls.SELFNAME: self,
+                    cls.SUPERNAME: Super(self, cls),
                     **cls._cellvars}
         self.cellmap = CellMap(cellvars)
         self.cellmap.close_all()

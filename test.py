@@ -40,23 +40,23 @@ class Writer(Selfless):
             _write(s)
 
 
-class WriterLeft(Writer):
+class WriterRight(Writer):
 
-    _foo = 'LEFT'  # gets shadowed 
+    _foo = 'RIGHT'  # gets shadowed
 
     def write_all():
         """ Super call goes to immediate parent. """
-        _write('left')
+        _write('right')
         super.write_all()
 
 
-class WriterRight(Writer):
+class WriterLeft(Writer):
 
-    _foo = 'RIGHT'  # is exposed
+    _foo = 'LEFT'   # is exposed
 
     def write_all():
         """ Super call goes to *sibling* when combined in child class. """
-        _write('right')
+        _write('left')
         super.write_all()
 
 
@@ -90,9 +90,9 @@ def test():
     x.set_delim('/')
     x.write_all()
     out = buf.getvalue()
-    expected = 'STARTRIGHTrightleft/1/2/3/4THE END'
+    expected = 'STARTLEFTleftright/1/2/3/4THE END'
     print('Need: ' + expected)
-    print('Got: ' + out)
+    print('Got:  ' + out)
     return int(out != expected)
 
 
