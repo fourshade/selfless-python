@@ -1,6 +1,7 @@
 """ HERE BE DRAGONS. That is all. """
 
 try:
+    from collections.abc import MutableMapping
     from dis import opmap
     from types import CellType, FunctionType
 except ImportError:
@@ -42,21 +43,24 @@ class BytecodeSubstitutions:
                     self._sub_table[oldop, i] = (newop, to_map[n])
 
     def global_to_deref(self, names):
-        code = self._code
-        global_refs = code.co_names
+        global_refs = self._code.co_names
         self._sub_free(global_refs, names,
                        [(OPS.LOAD_GLOBAL,  OPS.LOAD_DEREF),
                         (OPS.STORE_GLOBAL, OPS.STORE_DEREF)])
 
-    def local_to_deref(self, names, *, remove_args=True):
+    def _get_nargs(self):
         code = self._code
-        local_refs = list(code.co_varnames)
+        flags = code.co_flags
+        nargs = code.co_argcount + code.co_kwonlyargcount
+        nargs += bool(flags & 0x08)  # VARARGS
+        nargs += bool(flags & 0x10)  # VARKEYWORDS
+        return nargs
+
+    def local_to_deref(self, names, *, remove_args=True):
+        local_refs = self._code.co_varnames
         if remove_args:
-            nargs = code.co_argcount + code.co_kwonlyargcount
-            flags = code.co_flags
-            nargs += bool(flags & 0x08)  # VARARGS
-            nargs += bool(flags & 0x10)  # VARKEYWORDS
-            local_refs[:nargs] = [None] * nargs
+            nargs = self._get_nargs()
+            local_refs = ((None,) * nargs) + local_refs[nargs:]
         self._sub_free(local_refs, names,
                        [(OPS.LOAD_FAST,  OPS.LOAD_DEREF),
                         (OPS.STORE_FAST, OPS.STORE_DEREF)])
@@ -89,34 +93,42 @@ def hack_function_refs(f, names):
     return f_replace(f, code=code, closure=tuple(slots))
 
 
-class CellMap:
+class CellMap(MutableMapping):
 
     __slots__ = ('_d',)
 
-    def __init__(self, cellvars=None, *, parent_map=None):
-        self._d = {}
-        if parent_map is not None:
-            self._d.update(parent_map._d)
-        if cellvars is not None:
-            for k, v in cellvars.items():
-                self._d[k] = CellType(v)
+    def __init__(self, parent_map=None):
+        self._d = {} if parent_map is None else {**parent_map._d}
+
+    def __iter__(self):
+        return iter(self._d)
+
+    def __len__(self):
+        return len(self._d)
 
     def __getitem__(self, k):
         return self._d[k].cell_contents
 
     def __setitem__(self, k, v):
-        self._d[k].cell_contents = v
+        d = self._d
+        if k in d:
+            d[k].cell_contents = v
+        else:
+            d[k] = CellType(v)
+
+    def __delitem__(self, k):
+        del self._d[k]
 
     def replace_closure(self, f):
-        freevars = f.__code__.co_freevars
-        closure = f.__closure__
-        slots = [self._d[k] if k in self._d else v
-                 for k, v in zip(freevars, closure)]
-        return f_replace(f, closure=tuple(slots))
+        d = self._d
+        closure = list(f.__closure__)
+        for i, k in enumerate(f.__code__.co_freevars):
+            if k in d:
+                closure[i] = d[k]
+        return f_replace(f, closure=tuple(closure))
 
-    def replace_all_closures(self):
-        for k in self._d:
-            v = self[k]
+    def replace_own_closures(self):
+        for k, v in self.items():
             if type(v) is FunctionType:
                 self[k] = self.replace_closure(v)
 
@@ -157,9 +169,9 @@ class Super:
             mro.pop()
             scls = mro[-1]
             f = scls._cellvars[name]
-        new_cellvars = {scls.SELFNAME: inst,
-                        scls.SUPERNAME: Super(inst, cls, mro)}
-        cellmap = CellMap(new_cellvars, parent_map=inst.cellmap)
+        cellmap = CellMap(inst.cellmap)
+        cellmap[cls.SELFNAME] = inst
+        cellmap[cls.SUPERNAME] = Super(inst, cls, mro)
         return cellmap.replace_closure(f)
 
 
@@ -189,9 +201,9 @@ class Selfless:
 
     def __new__(cls, *args, **kwargs):
         self = object.__new__(cls)
-        cellvars = {cls.SELFNAME: self,
-                    cls.SUPERNAME: Super(self, cls),
-                    **cls._cellvars}
-        self.cellmap = CellMap(cellvars)
-        self.cellmap.replace_all_closures()
+        cellmap = self.cellmap = CellMap()
+        cellmap.update(cls._cellvars)
+        cellmap[cls.SELFNAME] = self
+        cellmap[cls.SUPERNAME] = Super(self, cls)
+        cellmap.replace_own_closures()
         return self
